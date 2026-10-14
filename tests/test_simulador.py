@@ -22,6 +22,7 @@ class PruebasSimulador(unittest.TestCase):
     """Comprueba mapeo, bloques, cálculos y repetibilidad del sistema."""
 
     def test_mapeo_y_decision_sin_ruido(self):
+        """Verifica que el demapeo recupere exactamente los bits originales."""
         # Todo mensaje válido debe sobrevivir al recorrido de ida y decisión.
         rng = np.random.default_rng(10)
         for esquema, orden in [("M-PAM", 4), ("M-PSK", 8), ("M-QAM", 16)]:
@@ -29,6 +30,7 @@ class PruebasSimulador(unittest.TestCase):
             np.testing.assert_array_equal(decidir(mapear(bits, esquema, orden), esquema, orden), bits)
 
     def test_vecinos_qam_gray_difieren_en_un_bit(self):
+        """Protege el etiquetado Gray en los vecinos de la cuadrícula QAM."""
         # En una cuadrícula QAM, toda pareja de vecinos horizontales/verticales
         # debe cambiar exactamente uno de los bits del símbolo.
         orden = 16
@@ -43,10 +45,12 @@ class PruebasSimulador(unittest.TestCase):
                     self.assertEqual((a ^ b).bit_count(), 1)
 
     def test_pulso_rrc_tiene_energia_unitaria(self):
+        """Comprueba la normalización necesaria para calibrar el filtro adaptado."""
         pulso = rrc(0.25, 8, 8)
         self.assertAlmostEqual(float(np.sum(pulso**2)), 1.0, places=12)
 
     def test_bloques_transmisor_canal_receptor(self):
+        """Ejercita las cuatro etapas explícitas con ruido casi nulo."""
         bits = np.tile(np.array([0, 0, 0, 1, 1, 1, 1, 0], dtype=np.uint8), 32)
         simbolos, basebanda, pulso, retardo = transmisor(bits, "M-QAM", 4, 0.25, 8, 8)
         pasabanda, portadora = modulador_pasabanda(basebanda, 8)
@@ -58,6 +62,7 @@ class PruebasSimulador(unittest.TestCase):
         self.assertEqual(len(salida), len(sin_ruido) + len(pulso) - 1)
 
     def test_simulacion_reproducible_en_tres_esquemas(self):
+        """Comprueba que misma configuración y semilla repiten bits y BER."""
         for esquema in ("M-PAM", "M-PSK", "M-QAM"):
             a = simular(esquema, 4, 0.25, 8, 256, 73)
             b = simular(esquema, 4, 0.25, 8, 256, 73)
@@ -67,6 +72,7 @@ class PruebasSimulador(unittest.TestCase):
             self.assertAlmostEqual(a.energia_bit, 0.5)
 
     def test_curvas_y_comparacion_teorica(self):
+        """Valida tendencias y equivalencia teórica entre 4-QAM y 4-PSK."""
         # 4-QAM y 4-PSK son constelaciones equivalentes salvo una rotación.
         ebno = np.array([0.0, 4.0, 8.0])
         np.testing.assert_allclose(ber_teorica("M-QAM", 4, ebno), ber_teorica("M-PSK", 4, ebno))
@@ -75,6 +81,7 @@ class PruebasSimulador(unittest.TestCase):
         self.assertAlmostEqual(float(ber_teorica("M-QAM", 4, requerido)), 1e-3, places=10)
 
     def test_ber_simulada_converge_hacia_teoria_a_6_db(self):
+        """Comprueba concordancia estadística donde se observan suficientes errores."""
         # Compara BER medida y aproximada donde se espera un número suficiente
         # de errores para que la estimación Monte Carlo tenga sentido.
         numero_simbolos = 20_000
@@ -87,6 +94,7 @@ class PruebasSimulador(unittest.TestCase):
             self.assertLessEqual(abs(resultado.ber - referencia), 6 * desviacion + 1 / numero_bits)
 
     def test_rechazo_de_parametros_invalidos(self):
+        """Verifica mensajes de error para entradas que no definen el sistema."""
         casos = [
             {"rolloff": 1.1},
             {"esquema": "M-QAM", "orden": 8},

@@ -1,12 +1,18 @@
 """Interfaz interactiva del proyecto de comunicaciones digitales."""
 
+# __future__ permite usar anotaciones modernas de tipos en todo el archivo.
 from __future__ import annotations
 
+# NumPy hace cálculos de FFT y operaciones numéricas para las gráficas.
 import numpy as np
+# Pandas organiza en tabla las diferencias Eb/N0 solicitadas.
 import pandas as pd
+# Plotly dibuja gráficos interactivos que se pueden ampliar y explorar.
 import plotly.graph_objects as go
+# Streamlit construye la interfaz desde controles y elementos de salida.
 import streamlit as st
 
+# El motor de señales y las funciones teóricas están aislados de la interfaz.
 from simulador import ber_teorica, ebno_requerido, simular
 
 
@@ -14,9 +20,12 @@ from simulador import ber_teorica, ebno_requerido, simular
 st.set_page_config(page_title="Sistema de comunicación digital", page_icon="📡", layout="wide")
 st.title("Simulación de un sistema de comunicación digital")
 st.caption("M-PAM · M-PSK · M-QAM | Transmisor, canal AWGN y receptor coherente")
+# Resumen del orden en que una trama atraviesa los bloques de comunicaciones.
 st.markdown("**Flujo de señal:** Bits → mapeo Gray → pulso RRC → portadora → canal AWGN → demodulación coherente → filtro adaptado → decisión y demapeo")
 
-# Los controles laterales exponen los parámetros funcionales del requerimiento.
+# La barra lateral reúne los parámetros del enlace. Los órdenes disponibles
+# respetan las constelaciones que el motor puede construir: PAM/PSK potencias
+# de dos y QAM cuadrados. Cada cambio provoca el recálculo de la página.
 with st.sidebar:
     st.header("Parámetros")
     esquema = st.selectbox("Esquema de modulación", ["M-PAM", "M-QAM", "M-PSK"])
@@ -28,27 +37,31 @@ with st.sidebar:
     semilla = st.number_input("Semilla aleatoria", min_value=0, max_value=2**31 - 1, value=2026, step=1)
 
 
+# Se cachea una simulación exacta por combinación de parámetros. Esto conserva
+# la actualización inmediata sin repetir cómputo al volver a un valor anterior.
 @st.cache_data(show_spinner=False, max_entries=32)
 def correr(esquema, orden, rolloff, ebno_db, numero_simbolos, semilla):
-    # Streamlit guarda resultados para no repetir un cálculo idéntico.
     return simular(esquema, orden, rolloff, ebno_db, numero_simbolos, semilla)
 
 
+# La curva medida requiere repetir el enlace para distintos Eb/N0. El eje de
+# barrido se mantiene fijo para comparar las mismas condiciones entre cambios;
+# cantidad de símbolos, semilla, modulación y roll-off sí cambian cada corrida.
 @st.cache_data(show_spinner=False, max_entries=32)
 def barrer_ebno(esquema, orden, rolloff, numero_simbolos, semilla):
-    # Ejecuta simulaciones Monte Carlo independientes para trazar la BER
-    # medida a varios Eb/N0 y compararla con la curva teórica.
     puntos = np.arange(-2.0, 20.01, 4.0)
     bers = []
     for indice, ebno in enumerate(puntos):
+        # Semillas distintas evitan reutilizar exactamente la misma realización
+        # de ruido en todos los puntos del eje; siguen siendo reproducibles.
         resultado = simular(esquema, orden, rolloff, ebno, numero_simbolos, semilla + indice + 1)
         bers.append(resultado.ber)
     return puntos, np.asarray(bers)
 
 
-# Streamlit vuelve a ejecutar el script al cambiar un control. El caché evita
-# repetir una simulación cuando los parámetros no cambiaron, así la interacción
-# actualiza la vista sin un botón de ejecución ni resultados obsoletos.
+# Streamlit vuelve a ejecutar el script cuando cambia cualquier widget. El
+# spinner comunica el cálculo; el caché mantiene rápidas las combinaciones ya
+# ejecutadas. Así no queda una gráfica vieja esperando un botón.
 try:
     with st.spinner("Actualizando la simulación y las gráficas…"):
         resultado = correr(esquema, orden, rolloff, ebno_db, numero_simbolos, int(semilla))
@@ -57,7 +70,11 @@ except ValueError as error:
     resultado = None
 
 if resultado is not None:
+    # El rótulo permite confirmar qué entrada produjo las gráficas visibles.
     st.caption(f"Simulación actual: {resultado.esquema}, M={resultado.orden}, roll-off={resultado.rolloff:.2f}, Eb/N₀={resultado.ebno_db:.1f} dB, {numero_simbolos:,} símbolos, semilla={int(semilla)}.")
+
+    # Métricas solicitadas. La eficiencia es bits/símbolo divididos por ancho
+    # pasabanda; energía y potencia usan la normalización Es=1 y Rs=1 del motor.
     met = st.columns(6)
     met[0].metric("BER simulada", f"{resultado.ber:.3e}")
     met[1].metric("Energía por símbolo", f"{resultado.energia_simbolo:.3f}")
@@ -66,7 +83,9 @@ if resultado is not None:
     met[4].metric("Eficiencia espectral", f"{np.log2(resultado.orden) / (1 + resultado.rolloff):.3f} bit/s/Hz")
     met[5].metric("Potencia pasabanda", f"{resultado.potencia_pasabanda:.3f}")
 
-    # Curva teórica y curva simulada; el piso visual evita ceros en escala log.
+    # BER vs Eb/N0: teoría es una línea densa; la serie Monte Carlo usa los
+    # mismos parámetros de modulación, pulso, semilla y longitud de trama.
+    # El marcador negro corresponde exactamente al Eb/N0 seleccionado arriba.
     st.subheader("Desempeño BER frente a Eb/N₀")
     ebno_axis = np.arange(-2.0, 20.01, 0.25)
     ber_axis = ber_teorica(resultado.esquema, resultado.orden, ebno_axis)
@@ -74,8 +93,12 @@ if resultado is not None:
         simbolos_barrido = resultado.bits_tx.size // int(np.log2(resultado.orden))
         x_sim, y_sim = barrer_ebno(resultado.esquema, resultado.orden, resultado.rolloff, simbolos_barrido, int(semilla))
     fig_ber = go.Figure()
+    # La línea teórica puede caer por debajo del mínimo representable en la
+    # gráfica log; 1e-8 es solo un piso visual, no una BER teórica medida.
     fig_ber.add_trace(go.Scatter(x=ebno_axis, y=np.maximum(ber_axis, 1e-8), mode="lines", name="BER teórica (aproximación)", line=dict(color="#1565C0", width=3)))
     bits_barrido = simbolos_barrido * int(np.log2(resultado.orden))
+    # Si el barrido no observa errores, BER=0 no puede dibujarse en escala
+    # log. Se dibuja 0.5/Nbits como límite de resolución, no como medida real.
     y_sim_vis = np.maximum(y_sim, 0.5 / bits_barrido)
     fig_ber.add_trace(go.Scatter(x=x_sim, y=y_sim_vis, mode="lines+markers", name="BER simulada", line=dict(color="#E65100", width=2, dash="dash"), marker=dict(size=8)))
     fig_ber.add_trace(go.Scatter(x=[resultado.ebno_db], y=[max(resultado.ber, 0.5 / len(resultado.bits_tx))], mode="markers", name=f"Simulación actual ({resultado.ebno_db:.1f} dB)", marker=dict(color="#111111", size=12, symbol="diamond")))
@@ -85,8 +108,8 @@ if resultado is not None:
     st.caption("El roll-off modifica el pulso, el espectro, el ojo y el ancho de banda. En un sistema ideal con filtro adaptado no cambia la BER teórica; la BER simulada puede variar ligeramente por el filtrado finito y el ruido aleatorio.")
     st.caption("La resolución Monte Carlo está limitada por la cantidad finita de bits. Para BER objetivo menores que ese límite, usa la comparación teórica de abajo; no se interpreta un punto sin errores como BER cero.")
 
-    # Diagrama de ojo: superpone ventanas de dos símbolos de la salida del
-    # filtro adaptado para mostrar interferencia entre símbolos y apertura.
+    # Diagrama de ojo: cada traza toma dos periodos de símbolo de la salida del
+    # filtro adaptado. Al superponerlas se aprecia apertura y posibles ISI.
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("Diagrama de ojo en recepción")
@@ -94,6 +117,7 @@ if resultado is not None:
         salida = resultado.salida_filtro
         trazas = []
         for i in range(10, min(100, len(resultado.simbolos_tx) - 1)):
+            # Centro de cada ventana en el instante de muestreo compensado.
             centro = resultado.retardo_total + i * sps
             tramo = salida[centro - sps : centro + sps + 1]
             if len(tramo) == 2 * sps + 1:
@@ -101,8 +125,8 @@ if resultado is not None:
         ojo = go.Figure(trazas)
         ojo.update_layout(xaxis_title="Tiempo normalizado (Tₛ)", yaxis_title="Amplitud del filtro adaptado", height=350, margin=dict(l=10, r=10, t=10, b=10))
         st.plotly_chart(ojo, width="stretch")
-    # Constelación: dibuja las muestras recibidas alrededor de sus regiones
-    # de decisión (la distancia más cercana determina el símbolo estimado).
+    # Constelación: los puntos son las muestras del receptor antes del decisor.
+    # El ruido las separa de los puntos ideales; por eso se dibujan I y Q.
     with c2:
         st.subheader("Constelación en recepción")
         const = go.Figure()
@@ -110,12 +134,15 @@ if resultado is not None:
         const.update_layout(xaxis_title="Componente en fase (I)", yaxis_title="Componente en cuadratura (Q)", yaxis=dict(scaleanchor="x", scaleratio=1), height=350, margin=dict(l=10, r=10, t=10, b=10))
         st.plotly_chart(const, width="stretch")
 
-    # FFT de señales discretas: frecuencia expresada en múltiplos de Rs;
-    # los niveles se muestran relativos para comparar la forma del espectro.
+    # FFT de las señales: las frecuencias se expresan en múltiplos de Rs. El
+    # espectro de transmisión usa la envolvente compleja en banda base; el de
+    # recepción usa la onda real pasabanda después del canal AWGN.
     c3, c4 = st.columns(2)
     with c3:
         st.subheader("Espectro de transmisión en banda base")
         señal = resultado.senal_basebanda
+        # Se escoge una FFT potencia de dos, se centra en frecuencia cero y se
+        # expresa la magnitud al cuadrado en dB con escala relativa.
         nfft = 2 ** int(np.ceil(np.log2(max(len(señal), 256))))
         freqs = np.fft.fftshift(np.fft.fftfreq(nfft, d=1 / resultado.muestras_por_simbolo))
         potencia = np.fft.fftshift(np.abs(np.fft.fft(señal, nfft)) ** 2 / nfft)
@@ -125,6 +152,7 @@ if resultado is not None:
     with c4:
         st.subheader("Espectro de recepción en pasabanda")
         señal = resultado.senal_pasabanda_rx
+        # Se aplica el mismo cálculo al registro recibido para comparar bandas.
         nfft = 2 ** int(np.ceil(np.log2(max(len(señal), 256))))
         freqs = np.fft.fftshift(np.fft.fftfreq(nfft, d=1 / resultado.muestras_por_simbolo))
         potencia = np.fft.fftshift(np.abs(np.fft.fft(señal, nfft)) ** 2 / nfft)
@@ -132,14 +160,15 @@ if resultado is not None:
         pb_fig.update_layout(xaxis_title="Frecuencia (Rs)", yaxis_title="Potencia (dB, escala relativa)", height=330, margin=dict(l=10, r=10, t=10, b=10))
         st.plotly_chart(pb_fig, width="stretch")
 
-# Comparación exigida en el documento: Eb/N0 para seis BER objetivo y sus
-# diferencias por pares, primero en tabla y luego en dos gráficas de análisis.
+# Comparación exigida: invierte las BER teóricas para hallar el Eb/N0 necesario
+# en 4-PAM, 4-QAM y 4-PSK; luego calcula las tres diferencias pedidas.
 st.divider()
 st.subheader("Comparación teórica: 4-PAM, 4-QAM y 4-PSK")
 st.write("Eb/N₀ requerido (dB) para alcanzar cada BER objetivo, calculado con las aproximaciones teóricas de cada esquema. La gráfica permite comparar los valores y sus diferencias.")
 objetivos = [10.0**(-i) for i in range(2, 8)]
 filas = []
 for objetivo in objetivos:
+    # Cada fila corresponde a una BER objetivo: 10^-2, 10^-3, ..., 10^-7.
     pam = ebno_requerido("M-PAM", 4, objetivo)
     qam = ebno_requerido("M-QAM", 4, objetivo)
     psk = ebno_requerido("M-PSK", 4, objetivo)
@@ -148,8 +177,9 @@ tabla = pd.DataFrame(filas)
 st.dataframe(tabla.style.format({c: "{:.2f}" for c in tabla.columns if c != "BER objetivo"}), width="stretch", hide_index=True)
 st.caption("Los diferenciales comparan el Eb/N₀ requerido para la misma BER. Un valor positivo indica que el esquema de la izquierda requiere más Eb/N₀.")
 
-# Gráfica izquierda: Eb/N0 requerido. Gráfica derecha: brecha con signo entre
-# esquemas; arriba de cero el primer esquema necesita más Eb/N0.
+# Gráfica izquierda: muestra requerimiento Eb/N0 de cada modulación por BER.
+# Gráfica derecha: un valor positivo significa que el esquema escrito primero
+# requiere más Eb/N0 que el segundo para la misma BER.
 comparacion, diferencias = st.columns(2)
 with comparacion:
     fig_req = go.Figure()
@@ -176,6 +206,8 @@ with diferencias:
 st.markdown("**Lectura del resultado:** 4-QAM y 4-PSK tienen la misma BER teórica porque sus constelaciones de cuatro puntos son equivalentes salvo una rotación. La 4-PAM es unidimensional, por lo que su separación entre símbolos con energía media normalizada difiere; la brecha se aprecia en la gráfica y en la tabla.")
 
 with st.expander("Modelo matemático y supuestos"):
+    # Se dejan las ecuaciones junto al panel para que el usuario pueda
+    # relacionar normalización, AWGN, BER, ancho de banda y eficiencia.
     st.markdown(r"""
     - Bits por símbolo: $k=\log_2(M)$.
     - La constelación se normaliza a energía media $E_s=1$; por ello $E_b=E_s/k$.

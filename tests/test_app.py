@@ -8,6 +8,7 @@ from streamlit.testing.v1 import AppTest
 
 class PruebasInterfaz(unittest.TestCase):
     def test_app_renderiza_graficas_metricas_y_comparacion(self):
+        """La página se ejecuta y presenta las gráficas y métricas requeridas."""
         ruta_app = Path(__file__).resolve().parents[1] / "app.py"
         app = AppTest.from_file(str(ruta_app), default_timeout=45).run()
         self.assertFalse(app.exception, [error.message for error in app.exception])
@@ -20,6 +21,7 @@ class PruebasInterfaz(unittest.TestCase):
         self.assertGreaterEqual(len(app.get("plotly_chart")), 6)
 
     def test_cambio_de_esquema_recalcula_sin_boton(self):
+        """Cambiar la modulación dispara otra ejecución sin botón adicional."""
         ruta_app = Path(__file__).resolve().parents[1] / "app.py"
         app = AppTest.from_file(str(ruta_app), default_timeout=45).run()
         app.selectbox[0].select("M-PAM").run()
@@ -28,6 +30,7 @@ class PruebasInterfaz(unittest.TestCase):
         self.assertGreaterEqual(len(app.metric), 6)
 
     def test_cualquier_parametro_actualiza_automaticamente_la_vista(self):
+        """El estado visible refleja cambios en roll-off, Eb/N0, tamaño y semilla."""
         ruta_app = Path(__file__).resolve().parents[1] / "app.py"
         app = AppTest.from_file(str(ruta_app), default_timeout=45).run()
         app.slider[0].set_value(0.5)
